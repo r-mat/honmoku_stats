@@ -1,0 +1,15 @@
+version = 0.1
+
+[staging.deploy]
+[staging.deploy.parameters]
+stack_name = "honmoku-stats-staging"
+region = "ap-northeast-1"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+
+parameter_overrides = [
+  "AppSyncApiKey=xxxxxx_STAGING_xxxxxx",
+  "SesFrom=your-verified-from@example.com",
+  "SesTo=your-mail@example.com"
+]

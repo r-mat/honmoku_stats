@@ -1,0 +1,233 @@
+# AWS SAM template for fishing data pipeline
+
+# CloudFormationテンプレートのバージョン（固定値）
+AWSTemplateFormatVersion: '2010-09-09'
+# AWS SAMのマクロを有効化（Serverlessアプリケーション用の拡張機能）
+Transform: AWS::Serverless-2016-10-31
+# このテンプレートの説明
+Description: Fishing data pipeline (AppSync -> S3/DDB -> SES)
+
+# 全Lambda関数に共通で適用される設定
+Globals:
+  Function:
+    # Python 3.12ランタイムを使用
+    Runtime: python3.12
+    # 関数のタイムアウト時間（秒）
+    Timeout: 60
+    # 関数に割り当てるメモリサイズ（MB）
+    MemorySize: 512
+    # AWS X-Rayトレーシングを有効化（デバッグ・監視用）
+    Tracing: Active
+    # 全関数で共通の環境変数
+    Environment:
+      Variables:
+        # AppSync GraphQL APIのエンドポイントURL
+        APPSYNC_URL: "https://iqqdsybr6beovaix6btxwykuha.appsync-api.ap-northeast-1.amazonaws.com/graphql"
+        # デフォルトの施設名
+        FACILITY_DEFAULT: "honmoku"
+
+# デプロイ時に指定するパラメータ（sam deploy時に値を渡す）
+Parameters:
+  # AppSync APIの認証キー（初回デプロイ時のみ使用）
+  # シークレットは一度作成されれば、その後はAWSコンソールやCLIで更新可能
+  AppSyncApiKey:
+    Type: String
+    NoEcho: true  # デプロイ時に値を入力しても画面に表示されない
+    Description: "AppSync GraphQL APIの認証キー（初回デプロイ時のみ必要）"
+  # SES（Simple Email Service）の送信元メールアドレス
+  SesFrom:
+    Type: String
+  # SESの送信先メールアドレス
+  SesTo:
+    Type: String
+
+# 作成するAWSリソースの定義
+Resources:
+  # AppSync APIキーを保存するSecrets Managerシークレット
+  # 初回デプロイ時に作成され、その後はAWSコンソールやCLIで更新可能
+  AppSyncApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      # シークレット名（スタック名を含めて一意にする）
+      Name: !Sub "honmoku-stats/${AWS::StackName}/appsync-api-key"
+      Description: "AppSync GraphQL APIの認証キー"
+      # シークレットの値（JSON形式で保存）
+      # 初回デプロイ時のみ使用され、その後は手動で更新
+      SecretString: !Sub |
+        {
+          "apiKey": "${AppSyncApiKey}"
+        }
+      # 自動ローテーションは無効（APIキーは手動で更新）
+      GenerateSecretString: false
+
+  # 生データを保存するS3バケット
+  RawBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # S3バケット名はグローバルで一意である必要があるため、
+      # アプリ名、スタック名、アカウントIDを含めて命名
+      # 形式: honmoku-stats-raw-{スタック名}-{アカウントID}
+      # 
+      # AWS::StackName: CloudFormationの組み込み疑似パラメータ（自動提供される値）
+      #   - sam deploy時に--stack-nameオプションで指定、またはsamconfig.tomlで設定
+      #   - 指定しない場合はデフォルトでディレクトリ名が使用される
+      # AWS::AccountId: 現在のAWSアカウントID（自動的に取得される）
+      BucketName: !Sub "honmoku-stats-raw-${AWS::StackName}-${AWS::AccountId}"
+
+  # 日次統計データを保存するDynamoDBテーブル
+  FishingDailyTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      # テーブル名を明示的に指定（リージョン内で一意である必要がある）
+      # 複数環境（dev/staging/prod）を同じリージョンにデプロイする場合の衝突を防ぐため、
+      # アプリ名とスタック名を含めて命名
+      # 形式: honmoku-stats-{スタック名}-fishing-daily
+      TableName: !Sub "honmoku-stats-${AWS::StackName}-fishing-daily"
+      # オンデマンド課金モード（使用量に応じて自動スケール）
+      BillingMode: PAY_PER_REQUEST
+      # テーブルの属性（カラム）定義
+      AttributeDefinitions:
+        - AttributeName: PK  # Partition Key（パーティションキー）
+          AttributeType: S    # String型
+        - AttributeName: SK  # Sort Key（ソートキー）
+          AttributeType: S    # String型
+      # テーブルのキー構成
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH   # パーティションキー（データの分散に使用）
+        - AttributeName: SK
+          KeyType: RANGE  # ソートキー（同一パーティション内での並び順を決定）
+
+  # 釣果データを保存するDynamoDBテーブル
+  FishingCatchTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      # テーブル名を明示的に指定（リージョン内で一意である必要がある）
+      # 複数環境（dev/staging/prod）を同じリージョンにデプロイする場合の衝突を防ぐため、
+      # アプリ名とスタック名を含めて命名
+      # 形式: honmoku-stats-{スタック名}-fishing-catch
+      TableName: !Sub "honmoku-stats-${AWS::StackName}-fishing-catch"
+      # オンデマンド課金モード（使用量に応じて自動スケール）
+      BillingMode: PAY_PER_REQUEST
+      # テーブルの属性（カラム）定義
+      AttributeDefinitions:
+        - AttributeName: PK  # Partition Key（パーティションキー）
+          AttributeType: S    # String型
+        - AttributeName: SK  # Sort Key（ソートキー）
+          AttributeType: S    # String型
+      # テーブルのキー構成
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH   # パーティションキー（データの分散に使用）
+        - AttributeName: SK
+          KeyType: RANGE  # ソートキー（同一パーティション内での並び順を決定）
+
+  # ---- Phase0: Fetcher ----
+  # AppSyncからデータを取得してS3/DynamoDBに保存するLambda関数
+  FetchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # 関数名を明示的に指定（リージョン内で一意である必要がある）
+      # 複数環境を同じリージョンにデプロイする場合の衝突を防ぐため、
+      # アプリ名とスタック名を含めて命名
+      # 形式: honmoku-stats-{スタック名}-fetch
+      FunctionName: !Sub "honmoku-stats-${AWS::StackName}-fetch"
+      # 関数のソースコードが配置されているディレクトリ
+      CodeUri: src/
+      # エントリーポイント（モジュール名.関数名）
+      Handler: fetcher.lambda_handler
+      # この関数に付与するIAMポリシー（アクセス権限）
+      Policies:
+        # S3バケットへの書き込み権限
+        - S3WritePolicy:
+            BucketName: !Ref RawBucket  # !Ref: 他のリソースを参照
+        # DynamoDBテーブルへの読み書き権限
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FishingDailyTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref FishingCatchTable
+        # SES（メール送信サービス）への送信権限
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: "*"
+        # Secrets Managerからシークレットを読み取る権限
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+              Resource: !GetAtt AppSyncApiKeySecret.Arn
+      # この関数専用の環境変数（Globalsの設定を上書き・追加）
+      Environment:
+        Variables:
+          # AppSync APIキーのシークレットARN（Lambda関数内でboto3を使って取得）
+          # シークレットはJSON形式で保存され、apiKeyキーから値を取得する
+          APPSYNC_API_KEY_SECRET_ID: !GetAtt AppSyncApiKeySecret.Arn
+          S3_BUCKET: !Ref RawBucket
+          DDB_DAILY_TABLE: !Ref FishingDailyTable
+          DDB_CATCH_TABLE: !Ref FishingCatchTable
+          SES_FROM: !Ref SesFrom
+          SES_TO: !Ref SesTo
+          # テスト用: 指定した日付のデータを取得する場合は値を設定（形式: YYYY-MM-DD）。空文字列の場合は前日を取得
+          TARGET_DATE: ""
+
+
+  # EventBridge Scheduler: Lambda関数を定期実行するスケジュール
+  DailySchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      # スケジュール名を明示的に指定（リージョン内で一意である必要がある）
+      # 複数環境を同じリージョンにデプロイする場合の衝突を防ぐため、
+      # アプリ名とスタック名を含めて命名
+      # 形式: honmoku-stats-{スタック名}-daily-schedule
+      Name: !Sub "honmoku-stats-${AWS::StackName}-daily-schedule"
+      # 時間の柔軟性なし（指定時刻に厳密に実行）
+      FlexibleTimeWindow:
+        Mode: "OFF"
+      # Cron式でスケジュールを定義（UTC時刻）
+      # JST 06:30 = UTC 21:30（前日）
+      # 形式: cron(分 時 日 月 曜年)
+      ScheduleExpression: "cron(30 21 * * ? *)"
+      # 実行対象のLambda関数
+      Target:
+        Arn: !GetAtt FetchFunction.Arn  # !GetAtt: リソースの属性を取得
+        # Lambda関数を呼び出すためのIAMロール
+        RoleArn: !GetAtt SchedulerInvokeRole.Arn
+
+
+  # DailySchedule（Scheduler）からFetchFunctionをInvokeできるようにするLambda Permission
+  FetchFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref FetchFunction
+      Principal: scheduler.amazonaws.com
+      SourceArn: !GetAtt DailySchedule.Arn
+
+  # EventBridge SchedulerがLambda関数を呼び出すためのIAMロール
+  SchedulerInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      # ロール名はCloudFormationが自動生成（{StackName}-{LogicalId}-{RandomSuffix}形式）
+      # スタック名が含まれるため識別可能で、名前の衝突も避けられる
+      # このロールを引き受けられるサービスを定義
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com  # EventBridge Schedulerサービス
+            Action: sts:AssumeRole
+      # このロールに付与する権限
+      Policies:
+        - PolicyName: InvokeLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction  # Lambda関数の実行権限
+                Resource: !GetAtt FetchFunction.Arn
+
