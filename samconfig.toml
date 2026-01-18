@@ -2,14 +2,14 @@ version = 0.1
 
 [staging.deploy]
 [staging.deploy.parameters]
-stack_name = "staging"
+stack_name = "honmoku-stats-staging"
 region = "ap-northeast-1"
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
 resolve_s3 = true
 
-parameter_overrides = [
-  "AppSyncApiKey=",
-  "SesFrom=",
-  "SesTo="
-]
+# 機密情報（AppSyncApiKey, SesFrom, SesTo）はGitHubにコミットしないため、
+# parameter_overridesは設定していません。
+# デプロイ時は以下のいずれかの方法で指定してください：
+# 1. コマンドライン: sam deploy --parameter-overrides "AppSyncApiKey=xxx SesFrom=xxx SesTo=xxx"
+# 2. 環境変数: SAMは環境変数からもパラメータを読み取れます

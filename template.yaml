@@ -49,7 +49,8 @@ Resources:
     Type: AWS::SecretsManager::Secret
     Properties:
       # シークレット名（スタック名を含めて一意にする）
-      Name: !Sub "honmoku-stats/${AWS::StackName}/appsync-api-key"
+      # 形式: {スタック名}/appsync-api-key
+      Name: !Sub "${AWS::StackName}/appsync-api-key"
       Description: "AppSync GraphQL APIの認証キー"
       # シークレットの値（JSON形式で保存）
       # 初回デプロイ時のみ使用され、その後は手動で更新
@@ -63,14 +64,14 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       # S3バケット名はグローバルで一意である必要があるため、
-      # アプリ名、スタック名、アカウントIDを含めて命名
-      # 形式: honmoku-stats-raw-{スタック名}-{アカウントID}
+      # スタック名、アカウントIDを含めて命名
+      # 形式: raw-{スタック名}-{アカウントID}
       # 
       # AWS::StackName: CloudFormationの組み込み疑似パラメータ（自動提供される値）
       #   - sam deploy時に--stack-nameオプションで指定、またはsamconfig.tomlで設定
-      #   - 指定しない場合はデフォルトでディレクトリ名が使用される
+      #   - 例: "honmoku-stats-dev" のようにプロジェクト名と環境名を含めることを推奨
       # AWS::AccountId: 現在のAWSアカウントID（自動的に取得される）
-      BucketName: !Sub "honmoku-stats-raw-${AWS::StackName}-${AWS::AccountId}"
+      BucketName: !Sub "raw-${AWS::StackName}-${AWS::AccountId}"
 
   # 日次統計データを保存するDynamoDBテーブル
   FishingDailyTable:
@@ -78,9 +79,9 @@ Resources:
     Properties:
       # テーブル名を明示的に指定（リージョン内で一意である必要がある）
       # 複数環境（dev/staging/prod）を同じリージョンにデプロイする場合の衝突を防ぐため、
-      # アプリ名とスタック名を含めて命名
-      # 形式: honmoku-stats-{スタック名}-fishing-daily
-      TableName: !Sub "honmoku-stats-${AWS::StackName}-fishing-daily"
+      # スタック名を含めて命名
+      # 形式: {スタック名}-fishing-daily
+      TableName: !Sub "${AWS::StackName}-fishing-daily"
       # オンデマンド課金モード（使用量に応じて自動スケール）
       BillingMode: PAY_PER_REQUEST
       # テーブルの属性（カラム）定義
@@ -102,9 +103,9 @@ Resources:
     Properties:
       # テーブル名を明示的に指定（リージョン内で一意である必要がある）
       # 複数環境（dev/staging/prod）を同じリージョンにデプロイする場合の衝突を防ぐため、
-      # アプリ名とスタック名を含めて命名
-      # 形式: honmoku-stats-{スタック名}-fishing-catch
-      TableName: !Sub "honmoku-stats-${AWS::StackName}-fishing-catch"
+      # スタック名を含めて命名
+      # 形式: {スタック名}-fishing-catch
+      TableName: !Sub "${AWS::StackName}-fishing-catch"
       # オンデマンド課金モード（使用量に応じて自動スケール）
       BillingMode: PAY_PER_REQUEST
       # テーブルの属性（カラム）定義
@@ -127,9 +128,9 @@ Resources:
     Properties:
       # 関数名を明示的に指定（リージョン内で一意である必要がある）
       # 複数環境を同じリージョンにデプロイする場合の衝突を防ぐため、
-      # アプリ名とスタック名を含めて命名
-      # 形式: honmoku-stats-{スタック名}-fetch
-      FunctionName: !Sub "honmoku-stats-${AWS::StackName}-fetch"
+      # スタック名を含めて命名
+      # 形式: {スタック名}-fetch
+      FunctionName: !Sub "${AWS::StackName}-fetch"
       # 関数のソースコードが配置されているディレクトリ
       CodeUri: src/
       # エントリーポイント（モジュール名.関数名）
@@ -179,9 +180,9 @@ Resources:
     Properties:
       # スケジュール名を明示的に指定（リージョン内で一意である必要がある）
       # 複数環境を同じリージョンにデプロイする場合の衝突を防ぐため、
-      # アプリ名とスタック名を含めて命名
-      # 形式: honmoku-stats-{スタック名}-daily-schedule
-      Name: !Sub "honmoku-stats-${AWS::StackName}-daily-schedule"
+      # スタック名を含めて命名
+      # 形式: {スタック名}-daily-schedule
+      Name: !Sub "${AWS::StackName}-daily-schedule"
       # 時間の柔軟性なし（指定時刻に厳密に実行）
       FlexibleTimeWindow:
         Mode: "OFF"
