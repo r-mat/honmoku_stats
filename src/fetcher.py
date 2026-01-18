@@ -440,24 +440,164 @@ def get_target_date() -> dt.date:
     return yesterday_jst()
 
 
-def lambda_handler(event, context):
+def get_date_range() -> Optional[Tuple[dt.date, dt.date]]:
     """
-    Lambda関数のエントリーポイント
-    前日の釣果データを取得し、S3とDynamoDBに保存する
+    環境変数から日付レンジを取得する
+    
+    環境変数START_DATEとEND_DATEが設定されている場合はそのレンジを返す
+    どちらか一方のみが設定されている場合はエラーを発生させる
+    
+    環境変数の形式: YYYY-MM-DD（例: "2024-01-15"）
+    
+    Returns:
+        (start_date, end_date) のタプル、または None（レンジが指定されていない場合）
+    
+    Raises:
+        ValueError: 環境変数の形式が不正な場合、または一方のみが設定されている場合
+    """
+    start_date_str = os.environ.get("START_DATE")
+    end_date_str = os.environ.get("END_DATE")
+    
+    # どちらも設定されていない場合はNoneを返す
+    if not start_date_str and not end_date_str:
+        return None
+    
+    # 一方のみが設定されている場合はエラー
+    if not start_date_str or not end_date_str:
+        raise ValueError(
+            f"Both START_DATE and END_DATE must be set together. "
+            f"START_DATE: {start_date_str}, END_DATE: {end_date_str}"
+        )
+    
+    try:
+        start_date = dt.datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        end_date = dt.datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    except ValueError as e:
+        raise ValueError(
+            f"Invalid date format. Expected YYYY-MM-DD format. "
+            f"START_DATE: {start_date_str}, END_DATE: {end_date_str}. {e}"
+        )
+    
+    # 開始日が終了日より後である場合はエラー
+    if start_date > end_date:
+        raise ValueError(
+            f"START_DATE ({start_date_str}) must be before or equal to END_DATE ({end_date_str})"
+        )
+    
+    return (start_date, end_date)
+
+
+def generate_date_list(start_date: dt.date, end_date: dt.date) -> List[dt.date]:
+    """
+    開始日から終了日までの日付リストを生成する（両端を含む）
+    
+    Args:
+        start_date: 開始日
+        end_date: 終了日
+    
+    Returns:
+        日付のリスト（開始日から終了日まで、時系列順）
+    """
+    date_list = []
+    current_date = start_date
+    while current_date <= end_date:
+        date_list.append(current_date)
+        current_date += dt.timedelta(days=1)
+    return date_list
+
+
+def process_single_date(facility: str, target_date: dt.date) -> Dict[str, Any]:
+    """
+    単一日付のデータを取得してS3とDynamoDBに保存する
     
     処理フロー:
-    1. 前日のcatch countを取得（必須）- 釣果の集計情報を含む
+    1. 指定日のcatch countを取得（必須）- 釣果の集計情報を含む
     2. 同じ日のfield conditionを取得（オプション）- 初期の気象条件など
     3. 同じ日のfishing reportを取得（オプション）- 途中経過情報
     4. データを正規化してS3とDynamoDBに保存
-    5. 成功/失敗のメール通知を送信
+    
+    Args:
+        facility: 施設名
+        target_date: 処理対象の日付
+        
+    Returns:
+        処理結果の辞書（status, date, catches数, raw keys）
+        
+    Raises:
+        Exception: 処理中にエラーが発生した場合
+    """
+    date_dash = ymd_dash(target_date)
+    raw_keys: Dict[str, str] = {}
+
+    # --- catch_count (required) ---
+    # 釣果数を取得（必須）- 釣果の集計情報が含まれる
+    raw_catch_count, items_catch_count = fetch_kind("catch_count", facility, target_date)
+    item_catch_count = pick_latest(items_catch_count)
+    raw_keys["catch_count"] = put_raw_to_s3(facility, "catch_count", date_dash, raw_catch_count)
+
+    # 釣果数から日次データと釣果データを正規化
+    daily = normalize_catch_count(item_catch_count, facility, date_dash)
+    catches = normalize_fishes(item_catch_count, facility, date_dash)
+    if not catches:
+        # 致命的ではないが、警告に値する
+        pass
+
+    # --- field_condition (optional) ---
+    # フィールド条件を取得（オプション）- 初期の気象条件などが含まれる
+    # 最初のリリースでは無効化（後から追加する可能性があるためコメントアウト）
+    # field_condition_payload = {}
+    # try:
+    #     raw_field_condition, items_field_condition = fetch_kind("field_condition", facility, target_date)
+    #     if items_field_condition:
+    #         item_field_condition = pick_latest(items_field_condition)
+    #         raw_keys["field_condition"] = put_raw_to_s3(facility, "field_condition", date_dash, raw_field_condition)
+    #         daily.update(normalize_field_condition(item_field_condition, facility, date_dash))
+    #     else:
+    #         field_condition_payload = {"note": "no field condition posts"}
+    # except Exception as e:
+    #     field_condition_payload = {"error": f"{e}"}
+
+    # --- fishing_report (optional) ---
+    # 釣果レポートを取得（オプション）- その日の途中経過情報が含まれる
+    # 最初のリリースでは無効化（後から追加する可能性があるためコメントアウト）
+    fishing_report_log: List[Dict[str, Any]] = []
+    # fishing_report_payload = {}
+    # try:
+    #     raw_fishing_report, items_fishing_report = fetch_kind("fishing_report", facility, target_date)
+    #     raw_keys["fishing_report"] = put_raw_to_s3(facility, "fishing_report", date_dash, raw_fishing_report)
+    #     fishing_report_log = normalize_fishing_reports(items_fishing_report)
+    # except Exception as e:
+    #     fishing_report_payload = {"error": f"{e}"}
+
+    # --- persist ---
+    # DynamoDBにデータを保存
+    put_ddb_daily(daily, raw_keys, fishing_report_log)
+    put_ddb_catches(catches)
+
+    return {"status": "ok", "date": date_dash, "catches": len(catches), "raw": raw_keys}
+
+
+def lambda_handler(event, context):
+    """
+    Lambda関数のエントリーポイント
+    指定された日付（または日付レンジ）の釣果データを取得し、S3とDynamoDBに保存する
+    
+    環境変数の設定:
+    - START_DATE, END_DATE: 日付レンジを指定（両方設定が必要、形式: YYYY-MM-DD）
+    - TARGET_DATE: 単一日付を指定（形式: YYYY-MM-DD）
+    - どちらも設定されていない場合: 前日を処理
+    
+    処理フロー:
+    1. 環境変数から日付レンジまたは単一日付を取得
+    2. 各日付に対してシリアルにデータ取得処理を実行
+    3. 成功/失敗のメール通知を送信
     
     Args:
         event: Lambdaイベント（facilityを指定可能）
         context: Lambdaコンテキスト
         
     Returns:
-        処理結果の辞書（status, date, catches数, raw keys）
+        処理結果の辞書（status, processed_dates, results）
         
     Raises:
         Exception: 処理中にエラーが発生した場合（メール通知後に再スロー）
@@ -465,94 +605,82 @@ def lambda_handler(event, context):
     # イベントから施設名を取得、なければデフォルト値を使用
     facility = (event.get("facility") if isinstance(event, dict) else None) or FACILITY_DEFAULT
 
-    # 日次実行 -> 前日のcatch countを主要な情報源として取得
-    # 環境変数TARGET_DATEが設定されている場合はその日付を使用、
-    # 設定されていない場合は日本時間（JST）基準で前日を取得（LambdaはUTC環境で実行されるため）
-    target_catch_count = get_target_date()
-    date_dash_catch_count = ymd_dash(target_catch_count)
-
-    # 説明文や条件情報のために、catch countと同じカレンダー日（前日）のfield condition/fishing reportも取得
-    # target_same = target_catch_count
-    # date_dash_same = date_dash_catch_count
-
     try:
-        raw_keys: Dict[str, str] = {}
+        # 日付レンジまたは単一日付を取得
+        date_range = get_date_range()
+        
+        if date_range:
+            # 日付レンジが指定されている場合
+            start_date, end_date = date_range
+            target_dates = generate_date_list(start_date, end_date)
+        else:
+            # 単一日付または前日を処理
+            target_date = get_target_date()
+            target_dates = [target_date]
 
-        # --- catch_count (required) ---
-        # 釣果数を取得（必須）- 釣果の集計情報が含まれる
-        raw_catch_count, items_catch_count = fetch_kind("catch_count", facility, target_catch_count)
-        item_catch_count = pick_latest(items_catch_count)
-        raw_keys["catch_count"] = put_raw_to_s3(facility, "catch_count", date_dash_catch_count, raw_catch_count)
+        # 各日付に対してシリアルに処理を実行
+        results: List[Dict[str, Any]] = []
+        errors: List[Dict[str, Any]] = []
+        
+        for target_date in target_dates:
+            date_dash = ymd_dash(target_date)
+            try:
+                result = process_single_date(facility, target_date)
+                results.append(result)
+            except Exception as e:
+                error_info = {
+                    "date": date_dash,
+                    "error": str(e),
+                }
+                errors.append(error_info)
+                # エラーが発生しても次の日付の処理を続行
 
-        # 釣果数から日次データと釣果データを正規化
-        daily = normalize_catch_count(item_catch_count, facility, date_dash_catch_count)
-        catches = normalize_fishes(item_catch_count, facility, date_dash_catch_count)
-        if not catches:
-            # 致命的ではないが、警告に値する
-            pass
-
-        # --- field_condition (optional) ---
-        # フィールド条件を取得（オプション）- 初期の気象条件などが含まれる
-        # 最初のリリースでは無効化（後から追加する可能性があるためコメントアウト）
-        # field_condition_payload = {}
-        # try:
-        #     raw_field_condition, items_field_condition = fetch_kind("field_condition", facility, target_same)
-        #     if items_field_condition:
-        #         item_field_condition = pick_latest(items_field_condition)
-        #         raw_keys["field_condition"] = put_raw_to_s3(facility, "field_condition", date_dash_same, raw_field_condition)
-        #         daily.update(normalize_field_condition(item_field_condition, facility, date_dash_same))
-        #     else:
-        #         field_condition_payload = {"note": "no field condition posts"}
-        # except Exception as e:
-        #     field_condition_payload = {"error": f"{e}"}
-
-        # --- fishing_report (optional) ---
-        # 釣果レポートを取得（オプション）- その日の途中経過情報が含まれる
-        # 最初のリリースでは無効化（後から追加する可能性があるためコメントアウト）
-        fishing_report_log: List[Dict[str, Any]] = []
-        # fishing_report_payload = {}
-        # try:
-        #     raw_fishing_report, items_fishing_report = fetch_kind("fishing_report", facility, target_same)
-        #     raw_keys["fishing_report"] = put_raw_to_s3(facility, "fishing_report", date_dash_same, raw_fishing_report)
-        #     fishing_report_log = normalize_fishing_reports(items_fishing_report)
-        # except Exception as e:
-        #     fishing_report_payload = {"error": f"{e}"}
-
-        # --- persist ---
-        # DynamoDBにデータを保存
-        put_ddb_daily(daily, raw_keys, fishing_report_log)
-        put_ddb_catches(catches)
-
-        # --- success mail ---
-        # 成功メールの本文を作成（上位10件の釣果を表示）
-        top_lines = []
-        for c in catches[:10]:
-            top_lines.append(
-                f"- {c['fish']}: {c.get('count')} / {c.get('minSize')}-{c.get('maxSize')}{c.get('unit')} / {c.get('place')}"
+        # メール通知を送信
+        processed_dates = [r["date"] for r in results]
+        total_catches = sum(r["catches"] for r in results)
+        
+        if errors:
+            # エラーが発生した場合
+            error_summary = "\n".join([f"- {e['date']}: {e['error']}" for e in errors])
+            body = (
+                f"バッチ処理完了（一部エラーあり）\n"
+                f"facility: {facility}\n"
+                f"処理日数: {len(results)}/{len(target_dates)}\n"
+                f"成功日付: {', '.join(processed_dates)}\n"
+                f"総釣果数: {total_catches}\n\n"
+                f"エラー:\n{error_summary}\n"
             )
-        top = "\n".join(top_lines) if top_lines else "(no fish entries)"
+            send_mail(
+                subject=f"[WARN] fishing batch {facility} ({len(results)}/{len(target_dates)} success)",
+                body=body,
+            )
+        else:
+            # 全て成功した場合
+            body = (
+                f"バッチ処理成功\n"
+                f"facility: {facility}\n"
+                f"処理日数: {len(results)}\n"
+                f"処理日付: {', '.join(processed_dates)}\n"
+                f"総釣果数: {total_catches}\n"
+            )
+            send_mail(
+                subject=f"[OK] fishing batch {facility} ({len(results)} dates)",
+                body=body,
+            )
 
-        body = (
-            f"釣果取得成功\n"
-            f"facility: {facility}\n"
-            f"date: {date_dash_catch_count}\n\n"
-            f"weather: {daily.get('weather')}\n"
-            f"waterTemp: {daily.get('waterTemp')}\n"
-            f"tide: {daily.get('tide')}\n"
-            f"visitors: {daily.get('visitors')}\n\n"
-            f"Top:\n{top}\n\n"
-            f"S3 raw keys:\n{json.dumps(raw_keys, ensure_ascii=False, indent=2)}\n"
-            # f"field_condition status: {json.dumps(field_condition_payload, ensure_ascii=False)}\n"
-            # f"fishing_report status: {json.dumps(fishing_report_payload, ensure_ascii=False)}\n"
-        )
-        send_mail(subject=f"[OK] fishing {facility} {date_dash_catch_count}", body=body)
-
-        return {"status": "ok", "date": date_dash_catch_count, "catches": len(catches), "raw": raw_keys}
+        return {
+            "status": "ok" if not errors else "partial",
+            "processed_dates": processed_dates,
+            "total_dates": len(target_dates),
+            "total_catches": total_catches,
+            "results": results,
+            "errors": errors if errors else None,
+        }
 
     except Exception as e:
         # エラー発生時はメール通知を送信してから再スロー
         send_mail(
-            subject=f"[NG] fishing {facility}",
+            subject=f"[NG] fishing batch {facility}",
             body=f"Error: {e}\n\nEvent:\n{json.dumps(event, ensure_ascii=False)}",
         )
         raise

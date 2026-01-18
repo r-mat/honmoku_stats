@@ -172,6 +172,10 @@ Resources:
           SES_TO: !Ref SesTo
           # テスト用: 指定した日付のデータを取得する場合は値を設定（形式: YYYY-MM-DD）。空文字列の場合は前日を取得
           TARGET_DATE: ""
+          # バッチ処理用: 日付レンジを指定する場合はSTART_DATEとEND_DATEの両方を設定（形式: YYYY-MM-DD）
+          # 通常の定期実行では設定不要（未定義のままでOK）
+          # START_DATE: ""
+          # END_DATE: ""
 
 
   # EventBridge Scheduler: Lambda関数を定期実行するスケジュール
