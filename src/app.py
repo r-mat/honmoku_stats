@@ -48,14 +48,14 @@ def handle_series(event: Dict[str, Any]) -> Dict[str, Any]:
 
     table = ddb.Table(DDB_CATCH_TABLE)
 
-    # DynamoDBのSKは "DATE#YYYY-MM-DD#..." なので、begins_with/Betweenが使える
+    # DynamoDBのSKは "DATE#YYYY-MM-DD" なので、begins_with/Betweenが使える
     # from/toがある場合は、DATE#... をキー条件に入れる
     if date_from and date_to:
-        sk_from = f"DATE#{date_from.isoformat()}#"
-        sk_to = f"DATE#{date_to.isoformat()}#\uffff"  # 末尾まで含めるため
+        sk_from = f"DATE#{date_from.isoformat()}"
+        sk_to = f"DATE#{date_to.isoformat()}"
         key_cond = Key("PK").eq(pk) & Key("SK").between(sk_from, sk_to)
     elif date_from:
-        sk_from = f"DATE#{date_from.isoformat()}#"
+        sk_from = f"DATE#{date_from.isoformat()}"
         key_cond = Key("PK").eq(pk) & Key("SK").gte(sk_from)
     else:
         key_cond = Key("PK").eq(pk)
@@ -76,7 +76,7 @@ def handle_series(event: Dict[str, Any]) -> Dict[str, Any]:
     # 念のため日付順にソート（SKに日付が入ってるので並ぶことが多いが保証しない）
     def extract_date(it: Dict[str, Any]) -> str:
         sk = it.get("SK", "")
-        # "DATE#2026-01-15#..." -> "2026-01-15"
+        # "DATE#2026-01-15" -> "2026-01-15"
         try:
             return sk.split("#")[1]
         except Exception:
