@@ -57,8 +57,6 @@ Resources:
         {
           "apiKey": "${AppSyncApiKey}"
         }
-      # 自動ローテーションは無効（APIキーは手動で更新）
-      GenerateSecretString: false
 
   # 生データを保存するS3バケット
   RawBucket:
@@ -159,13 +157,13 @@ Resources:
               Action:
                 - secretsmanager:GetSecretValue
                 - secretsmanager:DescribeSecret
-              Resource: !GetAtt AppSyncApiKeySecret.Arn
+              Resource: !Ref AppSyncApiKeySecret
       # この関数専用の環境変数（Globalsの設定を上書き・追加）
       Environment:
         Variables:
           # AppSync APIキーのシークレットARN（Lambda関数内でboto3を使って取得）
           # シークレットはJSON形式で保存され、apiKeyキーから値を取得する
-          APPSYNC_API_KEY_SECRET_ID: !GetAtt AppSyncApiKeySecret.Arn
+          APPSYNC_API_KEY_SECRET_ID: !Ref AppSyncApiKeySecret
           S3_BUCKET: !Ref RawBucket
           DDB_DAILY_TABLE: !Ref FishingDailyTable
           DDB_CATCH_TABLE: !Ref FishingCatchTable
