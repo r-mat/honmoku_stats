@@ -324,7 +324,7 @@ Resources:
   # 注意: ドメイン、証明書、Route53レコードは手動で作成してください
   ApiCustomDomain:
     Type: AWS::ApiGatewayV2::DomainName
-    Condition: HasCustomDomain
+    Condition: UseCustomDomain
     Properties:
       DomainName: !Ref ApiDomainName
       DomainNameConfigurations:
@@ -336,11 +336,10 @@ Resources:
   # 注意: FishingApiとそのステージが作成されるのを待つ必要があるため、DependsOnでFishingApiを指定
   ApiDomainMapping:
     Type: AWS::ApiGatewayV2::ApiMapping
-    Condition: HasCustomDomain
+    Condition: UseCustomDomain
     DependsOn:
       - ApiCustomDomain
-      - FishingApi
-      - ApiFunction
+      - FishingApiApiGatewayDefaultStage
     Properties:
       ApiId: !Ref FishingApi
       DomainName: !Ref ApiCustomDomain
