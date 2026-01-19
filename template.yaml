@@ -40,6 +40,25 @@ Parameters:
   # SESの送信先メールアドレス
   SesTo:
     Type: String
+  # API用のカスタムドメイン名（例: api.example.com）
+  ApiDomainName:
+    Type: String
+    Default: ""
+    Description: "API用のカスタムドメイン名（空文字列の場合はカスタムドメインを設定しない）"
+  # Route53のホストゾーンID（カスタムドメインを使用する場合に必要）
+  HostedZoneId:
+    Type: String
+    Default: ""
+    Description: "Route53のホストゾーンID（カスタムドメインを使用する場合に必要）"
+  # ACM証明書のARN（手動で作成した証明書のARNを指定）
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: "ACM証明書のARN（カスタムドメインを使用する場合に必要）"
+  CorsAllowOrigin:
+    Type: String
+    Default: "*"
+    Description: "CORSのAllowOrigin 本番は自ドメインに絞る"
 
 # 作成するAWSリソースの定義
 Resources:
@@ -234,3 +253,128 @@ Resources:
                 Action: lambda:InvokeFunction  # Lambda関数の実行権限
                 Resource: !GetAtt FetchFunction.Arn
 
+  # ---- Phase1: API ----
+  # API Gateway (HTTP API)の定義
+  FishingApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      # API名を明示的に指定
+      Name: !Sub "${AWS::StackName}-api"
+      # 認証設定: 認証なしでパブリックアクセスを許可
+      # 外部から直接呼び出し可能にする
+      StageName: "$default"
+      Auth:
+        DefaultAuthorizer: NONE
+      # CORS設定（必要に応じて調整）
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref CorsAllowOrigin
+        AllowMethods:
+          - GET
+          - OPTIONS
+        AllowHeaders:
+          - "*"
+        MaxAge: 300
+
+  # DynamoDBからデータを取得してAPIとして提供するLambda関数
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      # 関数名を明示的に指定（リージョン内で一意である必要がある）
+      # 複数環境を同じリージョンにデプロイする場合の衝突を防ぐため、
+      # スタック名を含めて命名
+      # 形式: {スタック名}-api
+      FunctionName: !Sub "${AWS::StackName}-api"
+      # 関数のソースコードが配置されているディレクトリ
+      CodeUri: src/
+      # エントリーポイント（モジュール名.関数名）
+      Handler: app.lambda_handler
+      # この関数に付与するIAMポリシー（アクセス権限）
+      Policies:
+        # DynamoDBテーブルへの読み取り権限
+        - DynamoDBReadPolicy:
+            TableName: !Ref FishingDailyTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref FishingCatchTable
+      # この関数専用の環境変数（Globalsの設定を上書き・追加）
+      Environment:
+        Variables:
+          DDB_DAILY_TABLE: !Ref FishingDailyTable
+          DDB_CATCH_TABLE: !Ref FishingCatchTable
+      # API Gatewayのイベント定義
+      Events:
+        # すべてのHTTPリクエストをこのLambda関数にルーティング
+        # app.pyのlambda_handlerが内部でパスに基づいてルーティングを処理
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FishingApi
+            Path: /{proxy+}
+            Method: ANY
+        # ルートパス（/）も処理できるようにする
+        RootApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref FishingApi
+            Path: /
+            Method: ANY
+
+  # ---- Phase1: Custom Domain ----
+  # API Gateway用のカスタムドメイン（条件付きで作成）
+  # 注意: ドメイン、証明書、Route53レコードは手動で作成してください
+  ApiCustomDomain:
+    Type: AWS::ApiGatewayV2::DomainName
+    Condition: HasCustomDomain
+    Properties:
+      DomainName: !Ref ApiDomainName
+      DomainNameConfigurations:
+        - CertificateArn: !Ref CertificateArn
+          EndpointType: REGIONAL
+          SecurityPolicy: TLS_1_2
+
+  # API GatewayのカスタムドメインとHTTP APIのマッピング
+  ApiDomainMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Condition: HasCustomDomain
+    DependsOn: ApiCustomDomain
+    Properties:
+      ApiId: !Ref FishingApi
+      DomainName: !Ref ApiCustomDomain
+      Stage: "$default"
+
+# 条件定義
+Conditions:
+  # カスタムドメイン名が指定されているか
+  HasCustomDomain: !Not [!Equals [!Ref ApiDomainName, ""]]
+  HasCertificateArn: !Not [!Equals [!Ref CertificateArn, ""]]
+  UseCustomDomain: !And [!Condition HasCustomDomain, !Condition HasCertificateArn]
+
+# デプロイ後に参照できる出力値
+Outputs:
+  # API GatewayのエンドポイントURL（デフォルト）
+  ApiEndpoint:
+    Description: "API GatewayのエンドポイントURL（デフォルト）"
+    Value: !GetAtt FishingApi.ApiEndpoint
+    # Export:
+    #   Name: !Sub "${AWS::StackName}-ApiEndpoint"
+  # カスタムドメインのエンドポイントURL（カスタムドメインが設定されている場合）
+  ApiCustomDomainEndpoint:
+    Condition: HasCustomDomain
+    Description: "カスタムドメインのエンドポイントURL"
+    Value: !Sub "https://${ApiDomainName}"
+    # Export:
+    #   Name: !Sub "${AWS::StackName}-ApiCustomDomainEndpoint"
+  # APIのエンドポイント例（使用例を表示）
+  ApiExampleSeries:
+    Description: "時系列データ取得APIのエンドポイント例"
+    Value: !If
+      - HasCustomDomain
+      - !Sub "https://${ApiDomainName}/v1/series?fish=クロダイ&facility=honmoku"
+      - !Sub "${FishingApi.ApiEndpoint}/v1/series?fish=クロダイ&facility=honmoku"
+
+  ApiExampleDay:
+    Description: "日次データ取得APIのエンドポイント例"
+    Value: !If
+      - HasCustomDomain
+      - !Sub "https://${ApiDomainName}/v1/day?date=2024-01-15&facility=honmoku"
+      - !Sub "${FishingApi.ApiEndpoint}/v1/day?date=2024-01-15&facility=honmoku"
