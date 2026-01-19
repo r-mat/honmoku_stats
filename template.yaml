@@ -276,26 +276,10 @@ Resources:
           - "*"
         MaxAge: 300
       # アクセスログ設定（CloudWatch Logsに出力）
+      # 注意: Formatは1行である必要があります
       AccessLogSettings:
         DestinationArn: !GetAtt ApiAccessLogGroup.Arn
-        Format: |
-          {
-            "requestId": "$context.requestId",
-            "ip": "$context.identity.sourceIp",
-            "requestTime": "$context.requestTime",
-            "httpMethod": "$context.httpMethod",
-            "routeKey": "$context.routeKey",
-            "status": $context.status,
-            "protocol": "$context.protocol",
-            "responseLength": $context.responseLength,
-            "userAgent": "$context.identity.userAgent",
-            "path": "$context.path",
-            "requestTimeEpoch": $context.requestTimeEpoch,
-            "integrationRequestId": "$context.integration.requestId",
-            "integrationStatus": "$context.integration.status",
-            "integrationLatency": "$context.integration.latency",
-            "integrationServiceStatus": "$context.integration.integrationStatus"
-          }
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":$context.status,"protocol":"$context.protocol","responseLength":$context.responseLength,"userAgent":"$context.identity.userAgent","path":"$context.path","requestTimeEpoch":$context.requestTimeEpoch,"integrationRequestId":"$context.integration.requestId","integrationStatus":"$context.integration.status","integrationLatency":"$context.integration.latency","integrationServiceStatus":"$context.integration.integrationStatus"}'
 
   # API Gatewayのアクセスログ用CloudWatch Logsロググループ
   ApiAccessLogGroup:
