@@ -13,3 +13,11 @@ resolve_s3 = true
 # デプロイ時は以下のいずれかの方法で指定してください：
 # 1. コマンドライン: sam deploy --parameter-overrides "AppSyncApiKey=xxx SesFrom=xxx SesTo=xxx"
 # 2. 環境変数: SAMは環境変数からもパラメータを読み取れます
+
+[production.deploy]
+[production.deploy.parameters]
+stack_name = "honmoku-stats-prod"
+region = "ap-northeast-1"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true

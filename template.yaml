@@ -275,6 +275,57 @@ Resources:
         AllowHeaders:
           - "*"
         MaxAge: 300
+      # アクセスログ設定（CloudWatch Logsに出力）
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: |
+          {
+            "requestId": "$context.requestId",
+            "ip": "$context.identity.sourceIp",
+            "requestTime": "$context.requestTime",
+            "httpMethod": "$context.httpMethod",
+            "routeKey": "$context.routeKey",
+            "status": $context.status,
+            "protocol": "$context.protocol",
+            "responseLength": $context.responseLength,
+            "userAgent": "$context.identity.userAgent",
+            "path": "$context.path",
+            "requestTimeEpoch": $context.requestTimeEpoch,
+            "integrationRequestId": "$context.integration.requestId",
+            "integrationStatus": "$context.integration.status",
+            "integrationLatency": "$context.integration.latency",
+            "integrationServiceStatus": "$context.integration.integrationStatus"
+          }
+
+  # API Gatewayのアクセスログ用CloudWatch Logsロググループ
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/${AWS::StackName}-api-access"
+      RetentionInDays: 30  # ログの保持期間（日数）。必要に応じて調整
+
+  # API Gatewayがロググループに書き込むためのリソースポリシー
+  ApiAccessLogGroupPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-api-access-log-policy"
+      PolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "apigateway.amazonaws.com"
+              },
+              "Action": [
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Resource": "${ApiAccessLogGroup.Arn}:*"
+            }
+          ]
+        }
 
   # DynamoDBからデータを取得してAPIとして提供するLambda関数
   ApiFunction:
