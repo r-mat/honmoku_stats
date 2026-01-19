@@ -263,6 +263,7 @@ Resources:
       # 認証設定: 認証なしでパブリックアクセスを許可
       # 外部から直接呼び出し可能にする
       # Authセクションを省略することで認証なしを指定
+      # デフォルトステージを明示的に指定（ApiDomainMappingで参照するため）
       StageName: "$default"
       # CORS設定（必要に応じて調整）
       CorsConfiguration:
@@ -332,10 +333,14 @@ Resources:
           SecurityPolicy: TLS_1_2
 
   # API GatewayのカスタムドメインとHTTP APIのマッピング
+  # 注意: FishingApiとそのステージが作成されるのを待つ必要があるため、DependsOnでFishingApiを指定
   ApiDomainMapping:
     Type: AWS::ApiGatewayV2::ApiMapping
     Condition: HasCustomDomain
-    DependsOn: ApiCustomDomain
+    DependsOn:
+      - ApiCustomDomain
+      - FishingApi
+      - ApiFunction
     Properties:
       ApiId: !Ref FishingApi
       DomainName: !Ref ApiCustomDomain
