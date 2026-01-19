@@ -262,9 +262,8 @@ Resources:
       Name: !Sub "${AWS::StackName}-api"
       # 認証設定: 認証なしでパブリックアクセスを許可
       # 外部から直接呼び出し可能にする
+      # Authセクションを省略することで認証なしを指定
       StageName: "$default"
-      Auth:
-        DefaultAuthorizer: NONE
       # CORS設定（必要に応じて調整）
       CorsConfiguration:
         AllowOrigins:
